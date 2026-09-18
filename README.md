@@ -37,7 +37,7 @@ Instead of relying on heavy, resource-intensive browser automation for actual da
 
 ```bash
 # Clone the repository
-git clone https://github.com/Netw0rkNoob/ScrapeClaw.git
+git clone https://github.com/YunyiFlux/ScrapeClaw.git
 cd ScrapeClaw
 
 # Install package in editable mode

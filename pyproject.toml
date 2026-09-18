@@ -44,7 +44,7 @@ where = ["."]
 include = ["scrapeclaw*"]
 
 [project.urls]
-Homepage = "https://github.com/Netw0rkNoob/ScrapeClaw"
-Repository = "https://github.com/Netw0rkNoob/ScrapeClaw"
-Documentation = "https://github.com/Netw0rkNoob/ScrapeClaw#readme"
-Issues = "https://github.com/Netw0rkNoob/ScrapeClaw/issues"
+Homepage = "https://github.com/YunyiFlux/ScrapeClaw"
+Repository = "https://github.com/YunyiFlux/ScrapeClaw"
+Documentation = "https://github.com/YunyiFlux/ScrapeClaw#readme"
+Issues = "https://github.com/YunyiFlux/ScrapeClaw/issues"

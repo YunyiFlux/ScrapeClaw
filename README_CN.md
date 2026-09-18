@@ -37,7 +37,7 @@
 
 ```bash
 # 克隆代码仓库
-git clone https://github.com/Netw0rkNoob/ScrapeClaw.git
+git clone https://github.com/YunyiFlux/ScrapeClaw.git
 cd ScrapeClaw
 
 # 以可编辑模式安装依赖
