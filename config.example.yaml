@@ -1,0 +1,23 @@
+# ==============================================================================
+# ScrapeClaw Configuration File Example
+# Copy this file to config.yaml or ~/.scrapeclaw/config.yaml
+# ==============================================================================
+
+llm:
+  provider: "openai"                           # Provider name: openai, deepseek, qwen, ollama
+  api_key: "sk-your-api-key-here"              # Your Model API Key
+  base_url: "https://api.openai.com/v1"       # OpenAI-compatible API base URL
+  model: "gpt-4o"                              # Model name (e.g. gpt-4o, deepseek-chat, qwen-plus)
+  temperature: 0.1                             # Recommended low temperature for agent stability
+  max_tokens: 4096
+
+browser:
+  headless: true                               # Set to false if you want to watch browser actions
+  cdp_url: null                                # e.g. "http://127.0.0.1:9222" to attach existing Chrome
+  timeout_seconds: 30
+  wait_until: "networkidle"
+
+solver:
+  max_steps: 30                                # Max agent exploration steps budget
+  max_tool_rounds: 6                           # Max tool calls per turn
+  output_dir: "./crawlers"                     # Default directory to save synthesized crawler scripts
