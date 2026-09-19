@@ -15,17 +15,21 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
-from scrapeclaw.config.settings import load_config
-from scrapeclaw.traffic.store import TrafficStore
-from scrapeclaw.probe.browser import BrowserProbe
-from scrapeclaw.engine.llm_client import LLMClient
-from scrapeclaw.engine.tool_manager import ToolManager
-from scrapeclaw.engine.solver import AgentSolver
-from scrapeclaw.exporter import get_exporter
-from scrapeclaw.engine.scope_guard import TargetScopeGuard
+
+import scrapeclaw
+from scrapeclaw.api import synthesize
+from scrapeclaw.exceptions import (
+    BrowserLaunchError,
+    ConfigurationError,
+    ExecutionGateError,
+    ReverseEngineeringError,
+    ScrapeClawError,
+    TargetNavigationError,
+)
 
 app = typer.Typer(help="ScrapeClaw - Autonomous SPA Reverse-Engineering & Crawler Synthesizer Agent")
 console = Console()
+
 
 @app.command("run")
 def run(
@@ -54,65 +58,35 @@ def run(
         console.print("[bold red]Error:[/bold red] Target URL is required. Provide it as positional argument or via --url.")
         raise typer.Exit(code=1)
 
-    config = load_config()
-    if browser_url:
-        config.browser.cdp_url = browser_url
-    config.browser.headless = headless
-    if api_key:
-        config.llm.api_key = api_key
-    if base_url:
-        config.llm.base_url = base_url
-    if model:
-        config.llm.model = model
-
-    if not config.llm.api_key:
-        msg = (
-            "[bold yellow]LLM API Key not found![/bold yellow]\n\n"
-            "Please configure your API Key using one of the following methods:\n"
-            "1. Create a [bold cyan].env[/bold cyan] file in project root:\n"
-            "   [green]OPENAI_API_KEY=sk-xxxx[/green]\n"
-            "   [green]OPENAI_BASE_URL=https://api.openai.com/v1[/green] (optional)\n\n"
-            "2. Pass directly in CLI:\n"
-            "   [green]python -m scrapeclaw run --url \"...\" --goal \"...\" --api-key sk-xxxx[/green]\n\n"
-            "3. Set terminal environment variable:\n"
-            "   [green]$env:OPENAI_API_KEY='sk-xxxx'[/green]"
-        )
-        console.print(Panel(msg, title="Configuration Notice"))
-        raise typer.Exit(code=1)
-
-    workspace = Path("./scrapeclaw_workspace")
-    workspace.mkdir(parents=True, exist_ok=True)
-    
-    custom_out_file = Path(output) if output else None
-    out_dir = custom_out_file.parent if custom_out_file else Path(config.solver.output_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
     engine_clean = (target_engine or "httpx").lower()
-    if engine_clean not in ("httpx", "scrapy", "drission", "drissionpage"):
-        console.print(f"[bold red]Error:[/bold red] Unsupported engine '{target_engine}'. Choose from: httpx, scrapy, drission.")
-        raise typer.Exit(code=1)
-
     header_info = (
         f"[bold cyan]ScrapeClaw Agent Initializing[/bold cyan]\n"
         f"[green]Target:[/green] {target_url}\n"
         f"[green]Goal:[/green] {goal}\n"
         f"[green]Engine:[/green] {engine_clean}\n"
-        f"[green]Model:[/green] {config.llm.model} ({config.llm.base_url})\n"
-        f"[green]Output:[/green] {output or str(out_dir / ('scrapeclaw_project' if engine_clean == 'scrapy' else 'generated_spider.py'))}\n"
+        f"[green]Output:[/green] {output or 'auto (workspace/output)'}\n"
         f"[green]Scope Guard:[/green] {'Permissive (cross-domain allowed)' if allow_cross_domain else 'Locked to target root domain'}"
     )
     console.print(Panel(header_info, title="ScrapeClaw"))
 
-    traffic_store = TrafficStore(workspace)
-
-    def on_captcha_event(event_type: str, payload: dict):
-        if event_type == "captcha_detected":
+    def cli_event_handler(kind: str, payload: dict):
+        if kind == "step_start":
+            console.print(f"\n[bold blue]-- Round {payload.get('step')} --[/bold blue]")
+        elif kind == "step_thought":
+            console.print(f"[dim]{payload.get('thought', '')}[/dim]")
+        elif kind == "tool_call":
+            console.print(f"[yellow][Tool Call][/yellow] [bold]{payload.get('tool', '')}[/bold]")
+        elif kind == "tool_result":
+            console.print(f"[green][Tool Result][/green] {payload.get('summary', '')}")
+        elif kind == "completed":
+            console.print(f"\n[bold green][SUCCESS][/bold green] {payload.get('reason', '')}")
+        elif kind == "captcha_detected":
             chal = payload.get("challenge")
             path = payload.get("screenshot_path", "")
             desc = chal.details if chal else ""
             ctype = chal.challenge_type.value if chal else "unknown"
             hint = ""
-            if config.browser.headless:
+            if headless:
                 hint = "\n[dim yellow]💡 提示: 浏览器处于无头模式(Headless)。若遇复杂人机验证需手动操作，建议追加 '--no-headless' 参数启动实机窗口。[/dim yellow]"
             msg = (
                 f"[bold red]⚠️  Bot Challenge Detected![/bold red]\n"
@@ -122,125 +96,104 @@ def run(
                 f"[cyan]Waiting for auto-bypass or human-in-the-loop resolution...[/cyan]{hint}"
             )
             console.print(Panel(msg, title="[bold red]Anti-Bot Security Challenge[/bold red]"))
-        elif event_type == "captcha_resolved":
+        elif kind == "captcha_resolved":
             chal = payload.get("challenge")
             ctype = chal.challenge_type.value if chal else "unknown"
             console.print(f"[bold green]✓ Captcha Challenge Resolved ({ctype})! Resuming exploration...[/bold green]")
-        elif event_type == "captcha_failed":
+        elif kind == "captcha_failed":
             chal = payload.get("challenge")
             ctype = chal.challenge_type.value if chal else "unknown"
             console.print(f"[bold red]❌ Captcha Challenge Resolution Failed or Timed Out ({ctype}).[/bold red]")
 
-    browser_probe = BrowserProbe(
-        traffic_store,
-        headless=config.browser.headless,
-        cdp_url=config.browser.cdp_url,
-        session_file=session_file,
-        save_session_path=save_session,
-        auto_solve_captcha=auto_solve_captcha,
-        hitl_timeout_seconds=hitl_timeout,
-        on_captcha_event=on_captcha_event,
-        target_url=target_url,
-    )
-    if session_file:
-        console.print(f"[bold cyan]🔑 Session Loaded:[/bold cyan] {session_file} (Bound to domain: {browser_probe.target_domain})")
-    llm_client = LLMClient(config.llm)
-    scope_guard = TargetScopeGuard(target_url, allow_cross_domain=allow_cross_domain)
-    tool_manager = ToolManager(
-        traffic_store,
-        browser_probe,
-        output_dir=out_dir,
-        custom_output_file=custom_out_file,
-        scope_guard=scope_guard,
-        target_engine=engine_clean,
-    )
+    try:
+        crawler = synthesize(
+            url=target_url,
+            goal=goal,
+            engine=engine_clean,
+            output=output,
+            data_output=data_output,
+            format=format,
+            session_file=session_file,
+            save_session=save_session,
+            allow_cross_domain=allow_cross_domain,
+            headless=headless,
+            cdp_url=browser_url,
+            auto_solve_captcha=auto_solve_captcha,
+            hitl_timeout=hitl_timeout,
+            max_steps=max_steps,
+            llm_api_key=api_key,
+            llm_base_url=base_url,
+            llm_model=model,
+            on_event=cli_event_handler,
+        )
 
-    def on_event(kind: str, payload: dict):
-        if kind == "step_start":
-            console.print(f"\n[bold blue]-- Round {payload['step']} --[/bold blue]")
-        elif kind == "agent_thought":
-            console.print(f"[dim]{payload['thought']}[/dim]")
-        elif kind == "tool_call":
-            console.print(f"[yellow][Tool Call][/yellow] [bold]{payload['tool']}[/bold]")
-        elif kind == "tool_result":
-            console.print(f"[green][Tool Result][/green] {payload['summary']}")
-        elif kind == "completed":
-            console.print(f"\n[bold green][SUCCESS][/bold green] {payload['reason']}")
+        items = crawler.sample_data or []
+        if items:
+            first_item = items[0]
+            keys = list(first_item.keys())[:5]
+            preview_count = min(len(items), 5)
 
-    solver = AgentSolver(llm_client, tool_manager, max_steps=max_steps, on_event=on_event)
-
-    async def _async_run():
-        await browser_probe.start()
-        try:
-            state = await solver.solve(target_url, goal)
-            if state.completed:
-                if data_output:
-                    data_file = Path(data_output)
-                elif custom_out_file:
-                    data_file = custom_out_file.parent / f"{custom_out_file.stem}_data.json"
-                else:
-                    data_file = out_dir / "extracted_data.json"
-
-                data_file.parent.mkdir(parents=True, exist_ok=True)
-                items = state.verified_sample_data or []
-                if items:
-                    from scrapeclaw.engine.constraint_policy import enforce_goal_spec_slice
-                    items = enforce_goal_spec_slice(items, getattr(state, "goal_spec", None))
-                    exporter = get_exporter(format_name=format, file_path=data_file)
-                    exporter.export(items, data_file)
-
-                if items:
-                    first_item = items[0]
-                    keys = list(first_item.keys())[:5]
-                    preview_count = min(len(items), 5)
-                    
-                    table = Table(
-                        title=f"🎉 目标数据提取成果预览 (展示前 {preview_count} 条 / 共 {len(items)} 条)",
-                        border_style="cyan",
-                        header_style="bold magenta"
-                    )
-                    for k in keys:
-                        table.add_column(
-                            str(k),
-                            style="bold yellow" if k in ("title", "name", "id") else "white",
-                            overflow="fold"
-                        )
-
-                    for item in items[:preview_count]:
-                        row_vals = []
-                        for k in keys:
-                            val = str(item.get(k, ""))
-                            if len(val) > 70:
-                                val = val[:67] + "..."
-                            row_vals.append(val)
-                        table.add_row(*row_vals)
-
-                    console.print("\n")
-                    console.print(table)
-                    console.print(f"\n[bold green]✔ 完整提取数据已落盘保存至:[/bold green] [cyan]{data_file.resolve()}[/cyan] ({len(items)} items)")
-                    console.print(f"[bold green]✔ 独立离线爬虫脚本已保存至:[/bold green] [cyan]{state.synthesized_code_path}[/cyan]\n")
-
-                pass_summary = (
-                    f"[bold green]Crawler Delivered & Physical Verification Passed![/bold green]\n\n"
-                    f"[cyan]Target URL:[/cyan] {target_url}\n"
-                    f"[cyan]Extraction Goal:[/cyan] {goal}\n"
-                    f"[cyan]Items Extracted:[/cyan] {len(items)} records\n"
-                    f"[cyan]Crawler Script:[/cyan] {state.synthesized_code_path}\n"
-                    f"[cyan]Saved Data File:[/cyan] {data_file.resolve()}\n\n"
-                    f"[dim]Run offline crawler directly anytime: [bold green]python {state.synthesized_code_path}[/bold green][/dim]"
+            table = Table(
+                title=f"🎉 目标数据提取成果预览 (展示前 {preview_count} 条 / 共 {len(items)} 条)",
+                border_style="cyan",
+                header_style="bold magenta",
+            )
+            for k in keys:
+                table.add_column(
+                    str(k),
+                    style="bold yellow" if k in ("title", "name", "id") else "white",
+                    overflow="fold",
                 )
-                console.print(Panel(pass_summary, title="Execution Gate Passed", border_style="green"))
-            else:
-                console.print(Panel("[bold red]Solve loop budget exhausted without verified crawler.[/bold red]", title="Incomplete", border_style="red"))
-        finally:
-            await browser_probe.close()
 
-    asyncio.run(_async_run())
+            for item in items[:preview_count]:
+                row_vals = []
+                for k in keys:
+                    val = str(item.get(k, ""))
+                    if len(val) > 70:
+                        val = val[:67] + "..."
+                    row_vals.append(val)
+                table.add_row(*row_vals)
+
+            console.print("\n")
+            console.print(table)
+            if data_output:
+                console.print(f"\n[bold green]✔ 完整提取数据已落盘保存至:[/bold green] [cyan]{Path(data_output).resolve()}[/cyan] ({len(items)} items)")
+            if output:
+                console.print(f"[bold green]✔ 独立离线爬虫脚本已保存至:[/bold green] [cyan]{Path(output).resolve()}[/cyan]\n")
+
+        pass_summary = (
+            f"[bold green]Crawler Delivered & Physical Verification Passed![/bold green]\n\n"
+            f"[cyan]Target URL:[/cyan] {target_url}\n"
+            f"[cyan]Extraction Goal:[/cyan] {goal}\n"
+            f"[cyan]Items Extracted:[/cyan] {len(items)} records\n"
+            f"[cyan]Elapsed Time:[/cyan] {crawler.elapsed_seconds}s\n"
+        )
+        if output:
+            pass_summary += f"[cyan]Crawler Script:[/cyan] {Path(output).resolve()}\n\n[dim]Run offline crawler directly anytime: [bold green]python {Path(output).resolve()}[/bold green][/dim]"
+        console.print(Panel(pass_summary, title="Execution Gate Passed", border_style="green"))
+
+    except ConfigurationError as e:
+        msg = (
+            f"[bold yellow]Configuration Error:[/bold yellow] {e}\n\n"
+            "Please configure your API Key using one of the following methods:\n"
+            "1. Create a [bold cyan].env[/bold cyan] file in project root:\n"
+            "   [green]OPENAI_API_KEY=sk-xxxx[/green]\n"
+            "   [green]OPENAI_BASE_URL=https://api.openai.com/v1[/green] (optional)\n\n"
+            "2. Pass directly in CLI:\n"
+            "   [green]scrapeclaw run --url \"...\" --goal \"...\" --api-key sk-xxxx[/green]\n\n"
+            "3. Set terminal environment variable:\n"
+            "   [green]$env:OPENAI_API_KEY='sk-xxxx'[/green]"
+        )
+        console.print(Panel(msg, title="Configuration Notice", border_style="yellow"))
+        raise typer.Exit(code=1)
+    except ScrapeClawError as e:
+        console.print(Panel(f"[bold red]Execution Failed:[/bold red] {e}", title="Error", border_style="red"))
+        raise typer.Exit(code=1)
+
 
 @app.command("version")
 def version():
     console.print("ScrapeClaw v1.0.0")
-
 
 
 @app.command("bench")
