@@ -103,6 +103,47 @@ scrapeclaw run https://news.ycombinator.com/ \
 
 ---
 
+---
+
+## 🐍 Python SDK 使用指南
+
+ScrapeClaw 提供了开箱即用的原生 Python SDK，方便直接嵌入现有脚本或数据处理管道：
+
+### 同步调用
+```python
+import scrapeclaw
+
+crawler = scrapeclaw.synthesize(
+    url="https://spa2.scrape.center/",
+    goal="抓取电影名称与评分",
+    engine="httpx",
+)
+
+print(crawler.code)
+crawler.save("./my_spider.py")
+```
+
+### 异步调用
+```python
+import scrapeclaw
+
+crawler = await scrapeclaw.synthesize_async(
+    url="https://spa2.scrape.center/",
+    goal="抓取电影名称与评分",
+)
+```
+
+### 上下文管理器（复用探针浏览器）
+```python
+from scrapeclaw import AsyncScrapeClaw
+
+async with AsyncScrapeClaw(headless=True) as client:
+    res1 = await client.synthesize("https://example.com/page1", "抓取数据列表")
+    res2 = await client.synthesize("https://example.com/page2", "抓取评论信息")
+```
+
+---
+
 ## 💡 真实用例参考 (Real-World Showcase)
 
 以下为 ScrapeClaw 在真实测试场景中自主逆向并合成爬虫的典型案例：

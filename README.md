@@ -107,6 +107,47 @@ scrapeclaw run https://news.ycombinator.com/ \
 
 ---
 
+---
+
+## 🐍 Python SDK Usage
+
+ScrapeClaw can be imported directly into your Python scripts or data pipelines:
+
+### Synchronous One-liner
+```python
+import scrapeclaw
+
+crawler = scrapeclaw.synthesize(
+    url="https://spa2.scrape.center/",
+    goal="Extract movie name, score, and categories",
+    engine="httpx",
+)
+
+print(crawler.code)
+crawler.save("./my_spider.py")
+```
+
+### Asynchronous One-liner
+```python
+import scrapeclaw
+
+crawler = await scrapeclaw.synthesize_async(
+    url="https://spa2.scrape.center/",
+    goal="Extract movie name, score, and categories",
+)
+```
+
+### Context Manager (Reuse Browser Probe)
+```python
+from scrapeclaw import AsyncScrapeClaw
+
+async with AsyncScrapeClaw(headless=True) as client:
+    res1 = await client.synthesize("https://example.com/page1", "Extract table")
+    res2 = await client.synthesize("https://example.com/page2", "Extract comments")
+```
+
+---
+
 ## 💡 Real-World Showcase
 
 Below are two real-world examples demonstrating what ScrapeClaw synthesizes without manual reverse engineering:
