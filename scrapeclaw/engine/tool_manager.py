@@ -5,13 +5,14 @@ from pathlib import Path
 from typing import Dict, Any, Tuple, Optional
 from scrapeclaw.traffic.store import TrafficStore
 from scrapeclaw.probe.browser import BrowserProbe
-from scrapeclaw.analyzer.distiller import distill_json_structure, score_json_match
+from scrapeclaw.analyzer.distiller import distill_json_structure, score_json_match, score_candidate_endpoint, detect_payload_encryption
 from scrapeclaw.analyzer.diff_probe import prune_minimal_headers
 from scrapeclaw.analyzer.pagination import infer_pagination_diff
 from scrapeclaw.synthesizer.generator import (
     render_crawler_script,
     render_drission_script,
     render_scrapy_project,
+    render_playwright_script,
     render_scaffold,
 )
 from scrapeclaw.synthesizer.ast_checker import (
@@ -154,13 +155,19 @@ class ToolManager:
                 if not raw_b:
                     continue
                 try:
-                    data = json.loads(raw_b)
-                    score, matched, data_path = score_json_match(data, goal_kws)
+                    try:
+                        data = json.loads(raw_b)
+                    except Exception:
+                        data = raw_b
+                    score, matched, data_path, is_enc = score_candidate_endpoint(
+                        r.request.url, r.request.method, data, goal_kws
+                    )
                     r.match_score = score
                     r.matched_keys = matched
+                    enc_tag = " [ENCRYPTED_PAYLOAD]" if is_enc else ""
                     if only_cand and score < 0.2:
                         continue
-                    out.append(f"- {r.id}: {r.request.method} {r.request.url[:80]} (Match={score:.0%}, keys={matched}, len={r.response.body_length}B)")
+                    out.append(f"- {r.id}: {r.request.method} {r.request.url[:80]}{enc_tag} (Match={score:.0%}, keys={matched}, len={r.response.body_length}B)")
                 except Exception:
                     continue
                 if len(out) >= limit:
@@ -173,6 +180,17 @@ class ToolManager:
             if not rec:
                 return f"Traffic record {t_id} not found."
             raw_b = self.traffic_store.read_raw_response(rec)
+            is_enc = detect_payload_encryption(raw_b)
+            if is_enc:
+                state.pin_fact("candidate_api", f"{rec.request.method} {rec.request.url} [ENCRYPTED]", traffic_id=t_id)
+                preview = raw_b[:300].decode("utf-8", errors="replace") if isinstance(raw_b, bytes) else str(raw_b)[:300]
+                return (
+                    f"=== Traffic {t_id} [ENCRYPTED_PAYLOAD] ===\n"
+                    f"URL: {rec.request.url}\n"
+                    f"Notice: Response payload is encrypted ciphertext (~{rec.response.body_length}B). "
+                    f"Decryption logic resides in frontend JS. Recommended engine: 'playwright' DOM mode.\n"
+                    f"Ciphertext Sample: {preview}..."
+                )
             try:
                 data = json.loads(raw_b)
                 distilled = distill_json_structure(data)
@@ -330,6 +348,23 @@ class ToolManager:
                 state.pin_fact("synthesized_engine", "drission", traffic_id="")
                 return f"DrissionPage crawler synthesized successfully at {out_path}! Next, MUST call execute_crawler_sandbox to verify."
 
+            elif self.target_engine in ("playwright", "playwright-dom", "dom"):
+                if self.custom_output_file:
+                    out_path = self.custom_output_file
+                else:
+                    self.output_dir.mkdir(parents=True, exist_ok=True)
+                    out_path = self.output_dir / "playwright_spider.py"
+
+                code = render_playwright_script(spec)
+                safe, reason = check_script_safety(code)
+                if not safe:
+                    return f"AST Safety Check Failed: {reason}"
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                out_path.write_text(code, encoding="utf-8")
+                state.synthesized_code_path = str(out_path)
+                state.pin_fact("synthesized_engine", "playwright", traffic_id="")
+                return f"Playwright DOM crawler synthesized successfully at {out_path}! Next, MUST call execute_crawler_sandbox to verify."
+
             else:
                 code = render_crawler_script(spec)
                 safe, reason = check_script_safety(code)
@@ -405,6 +440,9 @@ class ToolManager:
             if ok:
                 state.verified_sample_data = data
                 state.pin_fact("verified_crawler", f"Verified script at {script_p} extracted {len(data)} items")
+            else:
+                if any(tag in msg for tag in ("[RAW_HTML_DUMP]", "[UNPARSED_CIPHERTEXT]", "[403_FORBIDDEN]")):
+                    msg += "\n[ADAPTIVE_ADVICE] The target endpoint appears encrypted or protected by dynamic anti-bot signatures. Consider synthesizing a browser DOM crawler (e.g. Playwright with --session) instead of pure HTTP."
             return msg
 
         return f"Unknown tool: {tool_name}"

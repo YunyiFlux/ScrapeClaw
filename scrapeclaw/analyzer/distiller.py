@@ -1,3 +1,4 @@
+import urllib.parse
 """JSON Schema Distiller & Deep JSONPath Auto-Extractor."""
 from typing import Any, Tuple, List, Dict
 import json
@@ -134,3 +135,64 @@ def score_json_match(data: Any, goal_keywords: List[str]) -> Tuple[float, List[s
     data_path, _ = find_best_data_jsonpath(data, goal_keywords)
 
     return min(1.0, final_score), found_keys, data_path
+
+
+def detect_payload_encryption(data: Any) -> bool:
+    """Detect if response content is encrypted ciphertext (e.g. Base64 AES/DES)."""
+    if not data:
+        return False
+    if isinstance(data, bytes):
+        try:
+            text = data.decode("utf-8").strip()
+        except Exception:
+            return True
+    elif isinstance(data, str):
+        text = data.strip()
+    else:
+        return False
+
+    if text.startswith('"') and text.endswith('"'):
+        text = text[1:-1].strip()
+
+    if len(text) > 80 and re.fullmatch(r'[A-Za-z0-9+/=]{80,}', text):
+        return True
+    return False
+
+
+def score_candidate_endpoint(
+    url: str,
+    method: str,
+    data: Any,
+    goal_keywords: List[str]
+) -> Tuple[float, List[str], str, bool]:
+    """Score candidate endpoint relevance considering both decoded URL params and response payload."""
+    is_encrypted = detect_payload_encryption(data)
+    unquoted_url = urllib.parse.unquote(url).lower() if url else ""
+    matched_kws = []
+
+    url_matches = 0
+    for kw in goal_keywords:
+        kw_clean = kw.strip().lower()
+        if not kw_clean:
+            continue
+        if kw_clean in unquoted_url:
+            url_matches += 1
+            if kw_clean not in matched_kws:
+                matched_kws.append(kw_clean)
+
+    body_score, body_matched, data_path = (0.0, [], "data")
+    if not is_encrypted and data is not None:
+        try:
+            body_score, body_matched, data_path = score_json_match(data, goal_keywords)
+            for bm in body_matched:
+                if bm not in matched_kws:
+                    matched_kws.append(bm)
+        except Exception:
+            pass
+
+    if goal_keywords:
+        combined_score = max(body_score, (url_matches / len(goal_keywords)))
+    else:
+        combined_score = 0.0
+
+    return min(1.0, combined_score), matched_kws, data_path, is_encrypted

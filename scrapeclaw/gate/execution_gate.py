@@ -38,6 +38,95 @@ def classify_execution_error(proc_code: int, stdout: str, stderr: str, items_cou
     return None
 
 
+
+
+def validate_extracted_quality(parsed: List[Any], script_text: str = "") -> Tuple[bool, str]:
+    """Semantic data quality guard to prevent false-positive extraction."""
+    if not isinstance(parsed, list) or len(parsed) == 0:
+        return False, "[0_ITEMS] Crawler ran successfully but extracted 0 items (empty array)."
+
+    error_items = [
+        item for item in parsed
+        if isinstance(item, dict) and ("error" in item or item.get("status") == "error" or item.get("status_code") in (401, 403, 429, 500))
+    ]
+    if len(error_items) == len(parsed):
+        first_err = error_items[0].get("error") or error_items[0].get("status") or error_items[0].get("status_code")
+        str_err = str(first_err).lower()
+        if "403" in str_err:
+            tag = "[403_FORBIDDEN]"
+        elif "401" in str_err:
+            tag = "[401_UNAUTHORIZED]"
+        elif "429" in str_err:
+            tag = "[429_RATE_LIMIT]"
+        else:
+            tag = "[EXECUTION_ERROR]"
+        return False, f"{tag} Sandbox crawler failed: output records only contain error states ({first_err}). Target blocked or rejected request."
+
+    html_pattern = re.compile(r'^\s*<(?:!doctype\s+html|html|script|body|head|meta)', re.IGNORECASE)
+    for item in parsed:
+        if isinstance(item, dict):
+            for k, v in item.items():
+                if isinstance(v, str) and html_pattern.match(v):
+                    return False, "[RAW_HTML_DUMP] Sandbox crawler failed: output contains raw HTML markup or challenge interception page instead of structured entities."
+        elif isinstance(item, str) and html_pattern.match(item):
+            return False, "[RAW_HTML_DUMP] Sandbox crawler failed: output contains raw HTML markup instead of structured entities."
+
+    meta_keys = {"_raw", "raw", "html", "_html", "body", "page_source", "response", "text", "_page", "page", "url", "error", "status", "status_code", "turnstile_detected"}
+    b64_cipher_pattern = re.compile(r'^[A-Za-z0-9+/=]{80,}$')
+
+    for item in parsed:
+        if isinstance(item, dict):
+            non_meta_keys = [k for k in item.keys() if k.lower() not in meta_keys]
+            if not non_meta_keys:
+                return False, "[NO_STRUCTURED_FIELDS] Sandbox crawler failed: output records only contain fallback metadata fields without structured business data."
+
+            has_substantive = False
+            for k, v in item.items():
+                if k.lower() in meta_keys:
+                    continue
+                if isinstance(v, str):
+                    s_val = v.strip()
+                    if len(s_val) > 80 and b64_cipher_pattern.fullmatch(s_val):
+                        return False, "[UNPARSED_CIPHERTEXT] Sandbox crawler failed: extracted field contains unparsed encrypted ciphertext. Endpoint requires response decryption or DOM rendering."
+                    if s_val:
+                        has_substantive = True
+                elif v not in (None, "", [], {}):
+                    has_substantive = True
+            if not has_substantive:
+                return False, "[EMPTY_DATA] Sandbox crawler failed: extracted items contain no substantive data (all business fields are empty)."
+
+    has_substantive_data = False
+    for item in parsed:
+        if isinstance(item, dict):
+            payload_values = [
+                v for k, v in item.items()
+                if k.lower() not in ("url", "error", "status", "status_code", "turnstile_detected")
+                and v not in (None, "", [], {})
+            ]
+            if payload_values:
+                has_substantive_data = True
+                break
+        elif item:
+            has_substantive_data = True
+            break
+
+    if not has_substantive_data:
+        return False, "[EMPTY_DATA] Sandbox crawler failed: extracted items contain no substantive data (all fields are null/empty). Target site likely blocked request or requires dynamic JS execution."
+
+    placeholder_entities = [
+        item for item in parsed
+        if isinstance(item, dict) and (
+            (str(item.get("up_name") or "").lower() == "github" and "github.com/github" in str(item.get("url") or "").lower())
+            or (str(item.get("username") or "").lower() in ("dummy_user", "placeholder_user", "sample_user"))
+        )
+    ]
+    if len(placeholder_entities) == len(parsed) and len(parsed) > 0:
+        if "default_usernames" in script_text.lower() or "github.com/github" in script_text:
+            return False, "[ENTITY_DRIFT] Sandbox crawler failed: extracted records belong to public fallback entity 'GitHub' rather than target profile data. The crawler drifted away from the requested target."
+
+    return True, ""
+
+
 async def run_standalone_execution_gate(script_path: str, timeout_seconds: float = 25.0) -> Tuple[bool, str, List[Dict[str, Any]]]:
     path_obj = Path(script_path)
 
@@ -122,59 +211,10 @@ async def run_standalone_execution_gate(script_path: str, timeout_seconds: float
             return False, "Process completed but did not output a JSON list to stdout.", []
 
         parsed = json.loads(stdout[json_start:json_end + 1])
-        if not isinstance(parsed, list) or len(parsed) == 0:
-            return False, "[0_ITEMS] Crawler ran successfully but extracted 0 items (empty array).", []
-
-        # Quality Check 1: Check if extracted records are actually error records
-        error_items = [
-            item for item in parsed
-            if isinstance(item, dict) and ("error" in item or item.get("status") == "error" or item.get("status_code") in (401, 403, 429, 500))
-        ]
-        if len(error_items) == len(parsed):
-            first_err = error_items[0].get("error") or error_items[0].get("status") or error_items[0].get("status_code")
-            str_err = str(first_err).lower()
-            if "403" in str_err:
-                tag = "[403_FORBIDDEN]"
-            elif "401" in str_err:
-                tag = "[401_UNAUTHORIZED]"
-            elif "429" in str_err:
-                tag = "[429_RATE_LIMIT]"
-            else:
-                tag = "[EXECUTION_ERROR]"
-            return False, f"{tag} Sandbox crawler failed: output records only contain error states ({first_err}). Target blocked or rejected request.", []
-
-        # Quality Check 2: Check if extracted records contain any substantive data
-        has_substantive_data = False
-        for item in parsed:
-            if isinstance(item, dict):
-                # Filter out meta fields and check if any payload field has real content
-                payload_values = [
-                    v for k, v in item.items()
-                    if k not in ("url", "error", "status", "status_code", "turnstile_detected")
-                    and v not in (None, "", [], {})
-                ]
-                if payload_values:
-                    has_substantive_data = True
-                    break
-            elif item:
-                has_substantive_data = True
-                break
-
-        if not has_substantive_data:
-            return False, "[EMPTY_DATA] Sandbox crawler failed: extracted items contain no substantive data (all fields are null/empty). Target site likely blocked request or requires dynamic JS execution.", []
-
-        # Quality Check 3: Check for generic fallback placeholder or mock entity substitution (Anti-Drift)
-        placeholder_entities = [
-            item for item in parsed
-            if isinstance(item, dict) and (
-                (str(item.get("up_name") or "").lower() == "github" and "github.com/github" in str(item.get("url") or "").lower())
-                or (str(item.get("username") or "").lower() in ("dummy_user", "placeholder_user", "sample_user"))
-            )
-        ]
-        if len(placeholder_entities) == len(parsed) and len(parsed) > 0:
-            script_text = path_obj.read_text(encoding="utf-8", errors="replace") if path_obj.is_file() else ""
-            if "default_usernames" in script_text.lower() or "github.com/github" in script_text:
-                return False, "[ENTITY_DRIFT] Sandbox crawler failed: extracted records belong to public fallback entity 'GitHub' rather than target profile data. The crawler drifted away from the requested target.", []
+        script_text = path_obj.read_text(encoding="utf-8", errors="replace") if path_obj.is_file() else ""
+        valid, err_msg = validate_extracted_quality(parsed, script_text)
+        if not valid:
+            return False, err_msg, []
 
         return True, f"Execution passed! Extracted {len(parsed)} items offline successfully.", parsed
 

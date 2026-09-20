@@ -8,6 +8,7 @@ from scrapeclaw.synthesizer.scaffolders import (
     HttpxScaffolder,
     DrissionScaffolder,
     ScrapyScaffolder,
+    PlaywrightScaffolder,
     render_scaffold,
 )
 
@@ -27,6 +28,13 @@ def render_scrapy_project(spec: Dict[str, Any], output_path: Path) -> Dict[str, 
     return ScrapyScaffolder().generate(spec, output_path)
 
 
+
+
+def render_playwright_script(spec: Dict[str, Any]) -> str:
+    """Render browser DOM Playwright crawler script."""
+    return PlaywrightScaffolder().render_code(spec)
+
+
 __all__ = [
     "render_crawler_script",
     "render_drission_script",
@@ -36,4 +44,6 @@ __all__ = [
     "HttpxScaffolder",
     "DrissionScaffolder",
     "ScrapyScaffolder",
+    "PlaywrightScaffolder",
+    "render_playwright_script",
 ]

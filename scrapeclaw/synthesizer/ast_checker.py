@@ -10,7 +10,7 @@ ALLOWED_SANDBOX_MODULES = {
     "httpx", "httpcore", "asyncio", "json", "pydantic", "csv", "xml",
     "re", "html", "string", "base64", "hashlib", "sys", "time", "datetime",
     "math", "argparse", "pathlib", "logging", "typing", "urllib",
-    "tenacity", "scrapy", "itemadapter", "DrissionPage",
+    "tenacity", "scrapy", "itemadapter", "DrissionPage", "playwright",
     "subprocess", "os", "shutil", "scrapeclaw"
 }
 
