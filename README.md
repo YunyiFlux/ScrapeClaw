@@ -77,7 +77,17 @@ scrapeclaw doctor
 
 ## 💻 Basic Usage
 
-### Basic Extraction
+### Interactive Wizard (Recommended)
+Simply type `scrapeclaw` in your terminal without any arguments to launch the guided wizard:
+- **Quick Mode (Default)**: Enter target URL and extraction goal, then press Enter to immediately launch.
+- **Custom Mode**: Type `c` at confirmation to customize crawler engine (httpx/scrapy/drission), export format, and session credentials.
+- **Navigation**: Type `b` anytime to go back to the previous step, or `q` to safely exit.
+
+```bash
+scrapeclaw
+```
+
+### CLI Command Line Mode
 Give ScrapeClaw a target URL and your extraction goal in natural language:
 
 ```bash
