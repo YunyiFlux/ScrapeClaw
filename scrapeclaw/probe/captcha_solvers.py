@@ -134,11 +134,13 @@ class HumanInTheLoopSolver(BaseCaptchaSolver):
         poll_interval_seconds: float = 1.5,
         screenshot_dir: Optional[Path] = None,
         on_challenge_detected: Optional[Callable[[CaptchaChallenge, str], None]] = None,
+        is_headless: bool = False,
     ):
         self.timeout_seconds = timeout_seconds
         self.poll_interval_seconds = poll_interval_seconds
         self.screenshot_dir = screenshot_dir or Path("./scrapeclaw_workspace")
         self.on_challenge_detected = on_challenge_detected
+        self.is_headless = is_headless
         self.detector = CaptchaDetector()
 
     async def solve(self, page: Any, challenge: CaptchaChallenge) -> bool:
@@ -172,12 +174,14 @@ class HumanInTheLoopSolver(BaseCaptchaSolver):
                 if await CaptchaDetector.is_turnstile_resolved(page):
                     logger.info(f"Turnstile challenge token detected after {elapsed:.1f}s!")
                     return True
+                if await CaptchaDetector.is_dun_resolved(page):
+                    logger.info(f"NetEase Dun challenge resolved after {elapsed:.1f}s!")
+                    return True
                 remaining = await self.detector.detect_page(page)
                 if remaining is None:
                     logger.info(f"Captcha challenge resolved after {elapsed:.1f}s!")
                     return True
             except Exception:
-                # If page is navigating or closed, treat as resolving or continuing
                 pass
 
         logger.error(f"Captcha challenge timed out after {self.timeout_seconds}s.")
@@ -193,6 +197,7 @@ class CaptchaBypassBridge:
         hitl_timeout_seconds: int = 60,
         screenshot_dir: Optional[Path] = None,
         on_challenge_detected: Optional[Callable[[CaptchaChallenge, str], None]] = None,
+        is_headless: bool = False,
     ):
         self.auto_solve = auto_solve
         self.detector = CaptchaDetector()
@@ -201,6 +206,7 @@ class CaptchaBypassBridge:
             timeout_seconds=hitl_timeout_seconds,
             screenshot_dir=screenshot_dir,
             on_challenge_detected=on_challenge_detected,
+            is_headless=is_headless,
         )
 
     async def detect_and_bypass(self, page: Any) -> Optional[CaptchaChallenge]:

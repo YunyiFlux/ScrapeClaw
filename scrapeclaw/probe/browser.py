@@ -67,6 +67,7 @@ class BrowserProbe:
         self.captcha_bridge = CaptchaBypassBridge(
             auto_solve=self.auto_solve_captcha,
             hitl_timeout_seconds=self.hitl_timeout_seconds,
+            is_headless=self.headless,
             on_challenge_detected=lambda chal, path: (
                 self.on_captcha_event("captcha_detected", {"challenge": chal, "screenshot_path": path})
                 if self.on_captcha_event else None

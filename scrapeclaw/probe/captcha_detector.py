@@ -10,6 +10,7 @@ class ChallengeType(str, Enum):
     NONE = "none"
     CLOUDFLARE_TURNSTILE = "cloudflare_turnstile"
     GEETEST_SLIDER = "geetest_slider"
+    NETEASE_DUN = "netease_dun"
     RECAPTCHA = "recaptcha"
     HCAPTCHA = "hcaptcha"
     TENCENT_CAPTCHA = "tencent_captcha"
@@ -35,7 +36,6 @@ class CaptchaChallenge:
 class CaptchaDetector:
     """Detects bot challenges and captchas from HTML content or live Playwright page."""
 
-    # Rules mapping: (ChallengeType, pattern_list, preferred_selector, description)
     RULES = [
         (
             ChallengeType.CLOUDFLARE_TURNSTILE,
@@ -59,6 +59,22 @@ class CaptchaDetector:
             ],
             ".geetest_holder, .geetest_radar_tip, .geetest_slider",
             "Geetest slide/click captcha detected",
+        ),
+        (
+            ChallengeType.NETEASE_DUN,
+            [
+                r"cstaticdun",
+                r"dun\.163\.com",
+                r"NECaptcha",
+                r"yidun_input",
+                r"yidun_popup",
+                r"yidun_modal",
+                r"NECaptchaValidate",
+                r"网易易盾",
+                r"\byidun\b",
+            ],
+            ".yidun_popup, .yidun_modal, input[name='NECaptchaValidate'], .yidun_slider, .yidun",
+            "NetEase Dun (网易易盾) slider / puzzle captcha detected",
         ),
         (
             ChallengeType.RECAPTCHA,
@@ -94,7 +110,9 @@ class CaptchaDetector:
             [
                 r"安全验证",
                 r"请完成安全验证",
-                r"滑动验证",
+                r"完成安全验证",
+                r"人机验证",
+                r"验证码",
                 r"Security Check",
                 r"Access Denied",
                 r"Attention Required! \| Cloudflare",
@@ -156,10 +174,39 @@ class CaptchaDetector:
 
         return False
 
+    @staticmethod
+    async def is_dun_resolved(page: Any) -> bool:
+        """Check if NetEase Dun challenge has been solved (token populated or popup closed)."""
+        try:
+            evaluate_fn = getattr(page, "evaluate", None)
+            if evaluate_fn and callable(evaluate_fn):
+                res = await page.evaluate("""
+                () => {
+                    const dunInput = document.querySelector('input[name="NECaptchaValidate"]');
+                    if (dunInput && dunInput.value && dunInput.value.trim().length > 5) {
+                        return true;
+                    }
+                    const popup = document.querySelector('.yidun_popup, .yidun_modal, .yidun_slider');
+                    if (popup) {
+                        const style = window.getComputedStyle(popup);
+                        if (style.display === 'none' || style.visibility === 'hidden' || popup.offsetWidth === 0) {
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+                """)
+                if isinstance(res, bool) and res is True:
+                    return True
+        except Exception:
+            pass
+        return False
+
     async def detect_page(self, page: Any) -> Optional[CaptchaChallenge]:
         """Detect captcha on active Playwright Page object."""
-        # If Turnstile token is already present, it is already verified
         if await self.is_turnstile_resolved(page):
+            return None
+        if await self.is_dun_resolved(page):
             return None
 
         title = ""
@@ -168,20 +215,11 @@ class CaptchaDetector:
         except Exception:
             pass
 
-        # 1. First inspect title and DOM content
+        # 1. Inspect active iframes for cross-domain challenge embeds
         try:
-            content = await page.content()
-            challenge = self.detect_html(content, title=title)
-            if challenge:
-                return challenge
-        except Exception:
-            pass
-
-        # 2. Inspect active iframes for cross-domain challenge embeds
-        try:
-            frames = page.frames
+            frames = getattr(page, "frames", [])
             for f in frames:
-                url = f.url
+                url = getattr(f, "url", "")
                 if "challenges.cloudflare.com" in url:
                     return CaptchaChallenge(
                         challenge_type=ChallengeType.CLOUDFLARE_TURNSTILE,
@@ -203,6 +241,38 @@ class CaptchaDetector:
                         target_selector='iframe[src*="hcaptcha.com"]',
                         details="hCaptcha iframe found in frame tree",
                     )
+        except Exception:
+            pass
+
+        # 2. Inspect title and DOM content
+        try:
+            content = await page.content()
+            challenge = self.detect_html(content, title=title)
+            if challenge:
+                return challenge
+        except Exception:
+            pass
+
+        # 3. Inspect active DOM for NetEase Dun modal
+        try:
+            evaluate_fn = getattr(page, "evaluate", None)
+            if evaluate_fn and callable(evaluate_fn):
+                is_dun_active = await page.evaluate("""
+                () => {
+                    const popup = document.querySelector('.yidun_popup, .yidun_modal, .yidun_slider');
+                    if (!popup) return false;
+                    const style = window.getComputedStyle(popup);
+                    return style.display !== 'none' && style.visibility !== 'hidden' && popup.offsetWidth > 0;
+                }
+                """)
+                if isinstance(is_dun_active, bool) and is_dun_active is True:
+                    if not await self.is_dun_resolved(page):
+                        return CaptchaChallenge(
+                            challenge_type=ChallengeType.NETEASE_DUN,
+                            title=title,
+                            target_selector=".yidun_popup, .yidun_modal",
+                            details="Active NetEase Dun (网易易盾) challenge popup visible on page",
+                        )
         except Exception:
             pass
 

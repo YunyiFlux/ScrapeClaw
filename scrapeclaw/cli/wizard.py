@@ -136,9 +136,13 @@ def run_interactive_wizard() -> None:
                 console.print("  [1] httpx (轻量单文件异步爬虫，适合数据脚本) [默认]")
                 console.print("  [2] scrapy (工业级多文件脚手架工程)")
                 console.print("  [3] drission (DrissionPage 浏览器抗检测模式)")
-                engine_map = {"1": "httpx", "2": "scrapy", "3": "drission", "httpx": "httpx", "scrapy": "scrapy", "drission": "drission"}
-                cur_key = "1" if session.engine == "httpx" else ("2" if session.engine == "scrapy" else "3")
-                ans = session.ask("选择引擎 [1-3]", default=cur_key, choices=["1", "2", "3", "httpx", "scrapy", "drission"])
+                console.print("  [4] playwright (Playwright 现代化真实浏览器 DOM 渲染模式)")
+                engine_map = {
+                    "1": "httpx", "2": "scrapy", "3": "drission", "4": "playwright",
+                    "httpx": "httpx", "scrapy": "scrapy", "drission": "drission", "playwright": "playwright"
+                }
+                cur_key = "1" if session.engine == "httpx" else ("2" if session.engine == "scrapy" else ("3" if session.engine == "drission" else "4"))
+                ans = session.ask("选择引擎 [1-4]", default=cur_key, choices=["1", "2", "3", "4", "httpx", "scrapy", "drission", "playwright"])
                 session.engine = engine_map.get(ans, "httpx")
                 step = 5
 
