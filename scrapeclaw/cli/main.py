@@ -31,6 +31,21 @@ app = typer.Typer(help="ScrapeClaw - Autonomous SPA Reverse-Engineering & Crawle
 console = Console()
 
 
+@app.callback(invoke_without_command=True)
+def main_entry(
+    ctx: typer.Context,
+    version: bool = typer.Option(False, "--version", "-v", help="Show version and exit.", is_eager=True),
+):
+    """ScrapeClaw - Autonomous SPA Reverse-Engineering & Crawler Synthesizer Agent."""
+    if version:
+        console.print("ScrapeClaw v1.0.0")
+        raise typer.Exit()
+    if ctx.invoked_subcommand is None:
+        from scrapeclaw.cli.wizard import run_interactive_wizard
+        run_interactive_wizard()
+
+
+
 @app.command("run")
 def run(
     target_pos: Optional[str] = typer.Argument(None, help="Target SPA webpage URL (positional argument)"),

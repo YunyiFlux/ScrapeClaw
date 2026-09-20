@@ -15,7 +15,6 @@
 cookies.txt
 github_cookies.txt
 *session*.json
-!tests/fixtures/**
 
 # Python Bytecode & Build Artifacts
 __pycache__/
@@ -64,4 +63,6 @@ spiders/
 # Internal development design documentation (PRD, architecture, etc.)
 docs/
 
+
+# Exclude test suite from remote upload
 tests/
